@@ -1,0 +1,89 @@
+name: Oracle ARM retry
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: oracle-retry
+  cancel-in-progress: false
+
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
+      OCI_USER: ${{ secrets.OCI_USER_OCID }}
+      OCI_FP: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+      OCI_REGION: ${{ secrets.OCI_REGION }}
+      OCI_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+      AD: ${{ secrets.OCI_AVAILABILITY_DOMAIN }}
+      SUBNET: ${{ secrets.OCI_SUBNET_OCID }}
+      SSH_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+    steps:
+      - name: Install Oracle CLI
+        run: pip install --quiet oci-cli
+
+      - name: Set up Oracle login
+        run: |
+          mkdir -p ~/.oci
+          printf '%s\n' "$OCI_KEY" > ~/.oci/key.pem
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=$OCI_USER
+          fingerprint=$OCI_FP
+          tenancy=$OCI_TENANCY
+          region=$OCI_REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          sed -i 's/^[[:space:]]*//' ~/.oci/config
+          chmod 600 ~/.oci/config ~/.oci/key.pem
+
+      - name: Try to create the free ARM server
+        run: |
+          set +e
+          EXISTING=$(oci compute instance list --compartment-id "$OCI_TENANCY" --all \
+            --query 'length(data[?shape==`VM.Standard.A1.Flex` && "lifecycle-state"!=`TERMINATED` && "lifecycle-state"!=`TERMINATING`])' \
+            --raw-output 2>/dev/null)
+          if [ "${EXISTING:-0}" -gt 0 ] 2>/dev/null; then
+            echo "DONE: your ARM server already exists. You can disable this workflow now."
+            exit 0
+          fi
+
+          IMAGE=$(oci compute image list --compartment-id "$OCI_TENANCY" \
+            --operating-system "Canonical Ubuntu" --operating-system-version "22.04" \
+            --shape VM.Standard.A1.Flex --sort-by TIMECREATED --sort-order DESC \
+            --limit 1 --query 'data[0].id' --raw-output)
+          if [ -z "$IMAGE" ]; then
+            echo "ERROR: could not find an Ubuntu ARM image (check the login secrets)."
+            exit 1
+          fi
+
+          printf '%s\n' "$SSH_KEY" > /tmp/ssh.pub
+          OUT=$(oci compute instance launch \
+            --compartment-id "$OCI_TENANCY" \
+            --availability-domain "$AD" \
+            --subnet-id "$SUBNET" \
+            --image-id "$IMAGE" \
+            --shape VM.Standard.A1.Flex \
+            --shape-config '{"ocpus":4,"memoryInGBs":24}' \
+            --boot-volume-size-in-gbs 50 \
+            --assign-public-ip true \
+            --display-name n8n-server \
+            --ssh-authorized-keys-file /tmp/ssh.pub 2>&1)
+          STATUS=$?
+
+          if [ $STATUS -eq 0 ]; then
+            echo "SUCCESS: server created! Check Compute > Instances in Oracle."
+            exit 0
+          fi
+          if echo "$OUT" | grep -qiE "Out of host capacity|TooManyRequests|InternalError"; then
+            echo "No free capacity right now. Will try again on the next run."
+            exit 0
+          fi
+          echo "ERROR from Oracle:"
+          echo "$OUT" | grep -iE '"code"|"message"'
+          exit 1
