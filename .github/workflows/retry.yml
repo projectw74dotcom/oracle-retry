@@ -29,23 +29,21 @@ jobs:
 
       - name: Set up Oracle login
         run: |
+          clean() { printf '%s' "$1" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^[A-Za-z_]*[[:space:]]*=[[:space:]]*//'; }
+          U=$(clean "$OCI_USER"); F=$(clean "$OCI_FP"); T=$(clean "$OCI_TENANCY"); R=$(clean "$OCI_REGION")
+          echo "Check: user starts '${U:0:6}', tenancy starts '${T:0:6}', fingerprint is ${#F} chars (should be 47)"
+          echo "C_TENANCY=$T" >> "$GITHUB_ENV"
+          echo "C_AD=$(clean "$AD")" >> "$GITHUB_ENV"
+          echo "C_SUBNET=$(clean "$SUBNET")" >> "$GITHUB_ENV"
           mkdir -p ~/.oci
-          printf '%s\n' "$OCI_KEY" > ~/.oci/key.pem
-          cat > ~/.oci/config <<EOF
-          [DEFAULT]
-          user=$OCI_USER
-          fingerprint=$OCI_FP
-          tenancy=$OCI_TENANCY
-          region=$OCI_REGION
-          key_file=$HOME/.oci/key.pem
-          EOF
-          sed -i 's/^[[:space:]]*//' ~/.oci/config
+          printf '%s\n' "$OCI_KEY" | tr -d '\r' > ~/.oci/key.pem
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s\n' "$U" "$F" "$T" "$R" "$HOME/.oci/key.pem" > ~/.oci/config
           chmod 600 ~/.oci/config ~/.oci/key.pem
 
       - name: Try to create the free ARM server
         run: |
           set +e
-          EXISTING=$(oci compute instance list --compartment-id "$OCI_TENANCY" --all \
+          EXISTING=$(oci compute instance list --compartment-id "$C_TENANCY" --all \
             --query 'length(data[?shape==`VM.Standard.A1.Flex` && "lifecycle-state"!=`TERMINATED` && "lifecycle-state"!=`TERMINATING`])' \
             --raw-output 2>/dev/null)
           if [ "${EXISTING:-0}" -gt 0 ] 2>/dev/null; then
@@ -53,7 +51,7 @@ jobs:
             exit 0
           fi
 
-          IMAGE=$(oci compute image list --compartment-id "$OCI_TENANCY" \
+          IMAGE=$(oci compute image list --compartment-id "$C_TENANCY" \
             --operating-system "Canonical Ubuntu" --operating-system-version "22.04" \
             --shape VM.Standard.A1.Flex --sort-by TIMECREATED --sort-order DESC \
             --limit 1 --query 'data[0].id' --raw-output)
@@ -64,9 +62,9 @@ jobs:
 
           printf '%s\n' "$SSH_KEY" > /tmp/ssh.pub
           OUT=$(oci compute instance launch \
-            --compartment-id "$OCI_TENANCY" \
-            --availability-domain "$AD" \
-            --subnet-id "$SUBNET" \
+            --compartment-id "$C_TENANCY" \
+            --availability-domain "$C_AD" \
+            --subnet-id "$C_SUBNET" \
             --image-id "$IMAGE" \
             --shape VM.Standard.A1.Flex \
             --shape-config '{"ocpus":4,"memoryInGBs":24}' \
