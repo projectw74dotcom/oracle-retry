@@ -67,7 +67,7 @@ jobs:
             --subnet-id "$C_SUBNET" \
             --image-id "$IMAGE" \
             --shape VM.Standard.A1.Flex \
-            --shape-config '{"ocpus":4,"memoryInGBs":24}' \
+            --shape-config '{"ocpus":2,"memoryInGBs":12}' \
             --boot-volume-size-in-gbs 50 \
             --assign-public-ip true \
             --display-name n8n-server \
