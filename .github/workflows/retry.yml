@@ -60,6 +60,15 @@ jobs:
             exit 1
           fi
 
+          C_AD=$(oci iam availability-domain list --compartment-id "$C_TENANCY" --query 'data[0].name' --raw-output)
+          C_SUBNET=$(oci network subnet list --compartment-id "$C_TENANCY" --all \
+            --query 'data[?"prohibit-public-ip-on-vnic"==`false`] | [0].id' --raw-output)
+          if [ -z "$C_SUBNET" ]; then
+            echo "ERROR: no public subnet found. Create a VCN with the 'VCN with Internet Connectivity' wizard first."
+            exit 1
+          fi
+          echo "Using availability domain ...${C_AD: -6} and the first public subnet found."
+
           printf '%s\n' "$SSH_KEY" > /tmp/ssh.pub
           OUT=$(oci compute instance launch \
             --compartment-id "$C_TENANCY" \
